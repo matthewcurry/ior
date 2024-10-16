@@ -29,12 +29,6 @@
    typedef void*    hdfsFS;      /* unused, but needs a type */
 #endif
 
-#ifdef USE_RADOS_AIORI
-#  include <rados/librados.h>
-#else
-    typedef void *rados_t;
-    typedef void *rados_ioctx_t;
-#endif
 #include "option.h"
 #include "iordef.h"
 #include "aiori.h"
@@ -121,6 +115,7 @@ typedef struct
     IOR_offset_t expectedAggFileSize; /* calculated aggregate file size */
     IOR_offset_t randomPrefillBlocksize;   /* prefill option for random IO, the amount of data used for prefill */
 
+    char * savePerOpDataCSV;            /* save details about each I/O operation into this file */
     char * saveRankDetailsCSV;       /* save the details about the performance to a file */
     int summary_every_test;          /* flag to print summary every test, not just at end */
     int uniqueDir;                   /* use unique directory for each fpp */
@@ -154,10 +149,6 @@ typedef struct
     int fsync;                       /* fsync() after write */
 
     char*       URI;                 /* "path" to target object */
-
-    /* RADOS variables */
-    rados_t rados_cluster;           /* RADOS cluster handle */
-    rados_ioctx_t rados_ioctx;       /* I/O context for our pool in the RADOS cluster */
 
     int id;                          /* test's unique ID */
     int intraTestBarriers;           /* barriers between open/op and op/close */

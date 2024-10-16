@@ -4,6 +4,7 @@
 #include <mpi.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <utilities.h>
 
 typedef enum {
   MDTEST_DIR_CREATE_NUM = 0,
@@ -25,7 +26,7 @@ typedef struct
     double rate[MDTEST_LAST_NUM]; /* Calculated throughput after the barrier */
     double rate_before_barrier[MDTEST_LAST_NUM]; /* Calculated throughput before the barrier */
     double time[MDTEST_LAST_NUM]; /* Time */
-    double time_before_barrier[MDTEST_TREE_CREATE_NUM]; /* individual time before executing the barrier */
+    double time_before_barrier[MDTEST_LAST_NUM]; /* individual time before executing the barrier */
     uint64_t items[MDTEST_LAST_NUM]; /* Number of operations done in this process*/
     uint64_t total_errors;
 

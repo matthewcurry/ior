@@ -46,7 +46,7 @@ extraLDADD    += -lcudart
 endif
 
 if HAVE_GPU_DIRECT
-extraLDADD    += -lcufile
+extraLDADD    += -lcufile -lstdc++
 extraSOURCES  += utilities-gpu.cu
 endif
 
@@ -115,6 +115,13 @@ extraSOURCES += aiori-CHFS.c
 extraCPPFLAGS += @CHFS_CFLAGS@
 extraLDFLAGS += @CHFS_RPATH@
 extraLDADD += @CHFS_LIBS@
+endif
+
+if USE_FINCHFS_AIORI
+extraSOURCES += aiori-FINCHFS.c
+extraCPPFLAGS += @FINCHFS_CFLAGS@
+extraLDFLAGS += @FINCHFS_RPATH@
+extraLDADD += @FINCHFS_LIBS@
 endif
 
 if USE_S3_4C_AIORI

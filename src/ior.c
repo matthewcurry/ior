@@ -66,7 +66,7 @@ static char **ParseFileName(char *, int *);
 static void InitTests(IOR_test_t *);
 static void TestIoSys(IOR_test_t *);
 static void ValidateTests(IOR_param_t * params, MPI_Comm com);
-static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
+static IOR_offset_t WriteOrRead(IOR_param_t *test, int rep, IOR_results_t *results,
                                 aiori_fd_t *fd, const int access,
                                 IOR_io_buffers *ioBuffers);
 
@@ -125,12 +125,10 @@ static int test_initialize(IOR_test_t * test){
   verbose = test->params.verbose;
   backend = test->params.backend;
 
-#ifdef HAVE_CUDA
-  cudaError_t cret = cudaSetDevice(test->params.gpuID);
-  if(cret != cudaSuccess){
-    WARNF("cudaSetDevice(%d) error: %s", test->params.gpuID, cudaGetErrorString(cret));
+  if(test->params.gpuMemoryFlags != IOR_MEMORY_TYPE_CPU){
+    initCUDA(test->params.tasksBlockMapping, rank, test->params.numNodes, test->params.numTasksOnNode0, test->params.gpuID);
   }
-#endif
+  
 
   if(backend->initialize){
     backend->initialize(test->params.backend_options);
@@ -275,6 +273,7 @@ void init_IOR_Param_t(IOR_param_t * p, MPI_Comm com)
         p->numTasks = -1;
         p->numNodes = -1;
         p->numTasksOnNode0 = -1;
+        p->gpuID = -1;
 
         p->repetitions = 1;
         p->repCounter = -1;
@@ -818,7 +817,7 @@ static void RemoveFile(char *testFileName, int filePerProc, IOR_param_t * test)
                                 fprintf(out_logfile, "task %d removing %s\n", rank,
                                         testFileName);
                         }
-                        backend->delete(testFileName, test->backend_options);
+                        backend->remove(testFileName, test->backend_options);
                 }
                 if (test->reorderTasksRandom == TRUE) {
                         rankOffset = tmpRankOffset;
@@ -830,7 +829,7 @@ static void RemoveFile(char *testFileName, int filePerProc, IOR_param_t * test)
                                 fprintf(out_logfile, "task %d removing %s\n", rank,
                                         testFileName);
                         }
-                        backend->delete(testFileName, test->backend_options);
+                        backend->remove(testFileName, test->backend_options);
                 }
         }
 }
@@ -1200,7 +1199,8 @@ static void TestIoSys(IOR_test_t *test)
           GetTestFileName(testFileName, params);
           int ret = backend->stat(testFileName, & sb, params->backend_options);
           if(ret == 0) {
-            WARNF("The file \"%s\" exists already and will be overwritten", testFileName);
+            WARNF("The file \"%s\" exists already and will be %s", testFileName,
+		  params->useExistingTestFile ? "overwritten" : "deleted");
           }
         }
 
@@ -1267,7 +1267,7 @@ static void TestIoSys(IOR_test_t *test)
                                         CurrentTimeString());
                         }
                         timer[IOR_TIMER_RDWR_START] = GetTimeStamp();
-                        dataMoved = WriteOrRead(params, &results[rep], fd, WRITE, &ioBuffers);
+                        dataMoved = WriteOrRead(params, rep, &results[rep], fd, WRITE, &ioBuffers);
                         if (params->verbose >= VERBOSE_4) {
                           fprintf(out_logfile, "* data moved = %llu\n", dataMoved);
                           fflush(out_logfile);
@@ -1318,7 +1318,7 @@ static void TestIoSys(IOR_test_t *test)
                         params->open = WRITECHECK;
                         fd = backend->open(testFileName, IOR_RDONLY, params->backend_options);
                         if(fd == NULL) FAIL("Cannot open file");
-                        dataMoved = WriteOrRead(params, &results[rep], fd, WRITECHECK, &ioBuffers);
+                        dataMoved = WriteOrRead(params, rep, &results[rep], fd, WRITECHECK, &ioBuffers);
                         backend->close(fd, params->backend_options);
                         rankOffset = 0;
                 }
@@ -1397,7 +1397,7 @@ static void TestIoSys(IOR_test_t *test)
                                         CurrentTimeString());
                         }
                         timer[IOR_TIMER_RDWR_START] = GetTimeStamp();
-                        dataMoved = WriteOrRead(params, &results[rep], fd, operation_flag, &ioBuffers);
+                        dataMoved = WriteOrRead(params, rep, &results[rep], fd, operation_flag, &ioBuffers);
                         timer[IOR_TIMER_RDWR_STOP] = GetTimeStamp();
                         if (params->intraTestBarriers)
                                 MPI_CHECK(MPI_Barrier(testComm),
@@ -1452,6 +1452,10 @@ static void ValidateTests(IOR_param_t * test, MPI_Comm com)
         IOR_param_t defaults;
         init_IOR_Param_t(&defaults, com);
 
+        if (test->gpuDirect && test->gpuMemoryFlags == IOR_MEMORY_TYPE_CPU )
+          ERR("GPUDirect requires a non-CPU memory type");
+        if (test->gpuMemoryFlags == IOR_MEMORY_TYPE_GPU_DEVICE_ONLY && ! test->gpuDirect )
+          ERR("Using GPU Device memory only requires the usage of GPUDirect");
         if (test->stoneWallingStatusFile && test->keepFile == 0)
           ERR("a StoneWallingStatusFile is only sensible when splitting write/read into multiple executions of ior, please use -k");
         if (test->stoneWallingStatusFile && test->stoneWallingWearOut == 0 && test->writeFile)
@@ -1643,7 +1647,7 @@ IOR_offset_t *GetOffsetArrayRandom(IOR_param_t * test, int pretendRank, IOR_offs
         return (offsetArray);
 }
 
-static IOR_offset_t WriteOrReadSingle(IOR_offset_t offset, int pretendRank, IOR_offset_t transfer, int * errors, IOR_param_t * test, aiori_fd_t * fd, IOR_io_buffers* ioBuffers, int access){
+static IOR_offset_t WriteOrReadSingle(IOR_offset_t offset, int pretendRank, IOR_offset_t transfer, int * errors, IOR_param_t * test, aiori_fd_t * fd, IOR_io_buffers* ioBuffers, int access, OpTimer* ot, double startTime){
   IOR_offset_t amtXferred = 0;
 
   void *buffer = ioBuffers->buffer;
@@ -1651,7 +1655,9 @@ static IOR_offset_t WriteOrReadSingle(IOR_offset_t offset, int pretendRank, IOR_
           /* fills each transfer with a unique pattern
            * containing the offset into the file */
           update_write_memory_pattern(offset, ioBuffers->buffer, transfer, test->setTimeStampSignature, pretendRank, test->dataPacketType, test->gpuMemoryFlags);
+          double start = GetTimeStamp();
           amtXferred = backend->xfer(access, fd, buffer, transfer, offset, test->backend_options);
+          if(ot) OpTimerValue(ot, start - startTime, GetTimeStamp() - start);
           if (amtXferred != transfer)
                   ERR("cannot write to file");
           if (test->fsyncPerWrite)
@@ -1661,7 +1667,9 @@ static IOR_offset_t WriteOrReadSingle(IOR_offset_t offset, int pretendRank, IOR_
             nanosleep( & wait, NULL);
           }
   } else if (access == READ) {
+          double start = GetTimeStamp();
           amtXferred = backend->xfer(access, fd, buffer, transfer, offset, test->backend_options);
+          if(ot) OpTimerValue(ot, start - startTime, GetTimeStamp() - start);
           if (amtXferred != transfer)
                   ERR("cannot read from file");
           if (test->interIODelay > 0){
@@ -1670,13 +1678,17 @@ static IOR_offset_t WriteOrReadSingle(IOR_offset_t offset, int pretendRank, IOR_
           }
   } else if (access == WRITECHECK) {
           invalidate_buffer_pattern(buffer, transfer, test->gpuMemoryFlags);
+          double start = GetTimeStamp();
           amtXferred = backend->xfer(access, fd, buffer, transfer, offset, test->backend_options);
+          if(ot) OpTimerValue(ot, start - startTime, GetTimeStamp() - start);
           if (amtXferred != transfer)
                   ERR("cannot read from file write check");
           *errors += CompareData(buffer, transfer, test, offset, pretendRank, WRITECHECK);
   } else if (access == READCHECK) {
           invalidate_buffer_pattern(buffer, transfer, test->gpuMemoryFlags);          
+          double start = GetTimeStamp();
           amtXferred = backend->xfer(access, fd, buffer, transfer, offset, test->backend_options);
+          if(ot) OpTimerValue(ot, start - startTime, GetTimeStamp() - start);
           if (amtXferred != transfer){
             ERR("cannot read from file");
           }
@@ -1699,7 +1711,7 @@ static void prefillSegment(IOR_param_t *test, void * randomPrefillBuffer, int pr
       } else {
         offset += (i * test->numTasks * test->blockSize) + (pretendRank * test->blockSize);
       }
-      WriteOrReadSingle(offset, pretendRank, test->randomPrefillBlocksize, & errors, test, fd, ioBuffers, WRITE);
+      WriteOrReadSingle(offset, pretendRank, test->randomPrefillBlocksize, & errors, test, fd, ioBuffers, WRITE, NULL, 0);
     }
   }
   ioBuffers->buffer = oldBuffer;
@@ -1709,7 +1721,7 @@ static void prefillSegment(IOR_param_t *test, void * randomPrefillBuffer, int pr
  * Write or Read data to file(s).  This loops through the strides, writing
  * out the data to each block in transfer sizes, until the remainder left is 0.
  */
-static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
+static IOR_offset_t WriteOrRead(IOR_param_t *test, int rep, IOR_results_t *results,
                                 aiori_fd_t *fd, const int access, IOR_io_buffers *ioBuffers)
 {
         int errors = 0;
@@ -1742,7 +1754,14 @@ static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
           memset(randomPrefillBuffer, -1, test->randomPrefillBlocksize);
         }
 
-        // start timer after random offset was generated
+        /* Per operation statistics */
+        OpTimer * ot = NULL;
+        if(test->savePerOpDataCSV != NULL) {
+                char fname[FILENAME_MAX];
+                sprintf(fname, "%s-%d-%05d.csv", test->savePerOpDataCSV, rep, rank);
+                ot = OpTimerInit(fname, test->transferSize);
+        }
+        // start timer after random offset was generated        
         startForStonewall = GetTimeStamp();
         hitStonewall = 0;
 
@@ -1783,7 +1802,7 @@ static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
                   offset += (i * test->numTasks * test->blockSize) + (pretendRank * test->blockSize);
                 }
               }
-              dataMoved += WriteOrReadSingle(offset, pretendRank, test->transferSize, & errors, test, fd, ioBuffers, access);
+              dataMoved += WriteOrReadSingle(offset, pretendRank, test->transferSize, & errors, test, fd, ioBuffers, access, ot, startForStonewall);
               pairCnt++;
 
               hitStonewall = ((test->deadlineForStonewalling != 0
@@ -1846,7 +1865,7 @@ static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
                     offset += (i * test->numTasks * test->blockSize) + (pretendRank * test->blockSize);
                   }
                 }
-                dataMoved += WriteOrReadSingle(offset, pretendRank, test->transferSize, & errors, test, fd, ioBuffers, access);
+                dataMoved += WriteOrReadSingle(offset, pretendRank, test->transferSize, & errors, test, fd, ioBuffers, access, ot, startForStonewall);
                 pairCnt++;
               }
               j = 0;              
@@ -1856,6 +1875,7 @@ static IOR_offset_t WriteOrRead(IOR_param_t *test, IOR_results_t *results,
           point->pairs_accessed = pairCnt;
         }
 
+        OpTimerFree(& ot);
         totalErrorCount += CountErrors(test, access, errors);
 
         if (access == WRITE && test->fsync == TRUE) {
