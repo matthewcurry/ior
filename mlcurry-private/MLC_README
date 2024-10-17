@@ -1,0 +1,3 @@
+./bootstrap
+S3_PREFIX=/aws-s3/install/
+LDFLAGS=-L$S3_PREFIX/lib CPPFLAGS=-I$S3_PREFIX/include ./configure --with-S3-aws --prefix=/inst --without-mpiio 

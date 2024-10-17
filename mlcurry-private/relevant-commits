@@ -1,0 +1,8 @@
+git show ...
+
+7207f82b5e2c4e5080e1b80a9957e2046c634d66
+ - autoconf changes
+ - add testing/aws-s3.sh, which builds support libraries
+
+7c15bef4a79856c531694c598adc3f45f6181940
+ - Add "dummy" file (src/aiori-S3-aws.c), copied from a similar place (src/aiori-S3-libs3.c) and lightly updated for headers
