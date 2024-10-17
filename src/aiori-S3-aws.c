@@ -593,13 +593,13 @@ static void S3_final(aiori_mod_opt_t * options){
 
 
 ior_aiori_t S3_libS3_aiori = {
-        .name = "S3-libs3",
+        .name = "S3-aws-c-s3",
         .name_legacy = NULL,
         .create = S3_Create,
         .open = S3_Open,
         .xfer = S3_Xfer,
         .close = S3_Close,
-        .delete = S3_Delete,
+        .remove = S3_Delete,
         .get_version = S3_getVersion,
         .fsync = S3_Fsync,
         .xfer_hints = s3_xfer_hints,
